@@ -1,0 +1,52 @@
+Instalar e Configurar o Delphi 7 OK
+
+Instalar e Configurar Postgres   OK
+
+Criar estrutura na Base de Dados
+ Schema                   OK
+ Tabela
+  Separação               OK
+  Separação Item          OK
+  Recebimento             OK
+  Recebimento item        OK
+  Parametros              OK
+  Vinculo de Almoxarifado OK
+  Usuario
+  Controle de Acesso
+ 
+ Trigger
+  Separação
+   Inserir na tabela para geração do Arquivo OK
+   Barrar faturar a Pre-venda OK
+   Barrar alterar a quantidade do Item na Pre-venda OK
+  Recebimento
+   Inserir na tabela para geração do Arquivo  OK
+   Barrar alteração na Nota fiscal de Entrada OK
+   Barrar alteração na quantidade dos itens na nota fiscal de entrada OK
+  
+Tela para configuração gravando no arquivo Ini e na Base de Dados
+  Conexão com a Base de Dados                       OK
+  Servidor de FTP                                   OK
+  E-mail                                            OK
+  Vinculo do Almoxarifado Intermediario com o Final OK
+  
+Tela de Processos
+  Log
+  Enviar Nota de Entrada Para o Recebimento OK
+  Liberar Nota de Entrada para Edição       OK
+  Liberar Pré-Venda para Edição             OK
+  Login
+  Cadastro de usuario
+  Controle de Acesso de Usuario    
+  Acompanhar o Status
+    Recebimento OK
+	Separação   OK
+	
+Processos
+  Conexão a Base de Dados               OK   
+  Geração do Arquivo para Envio do FTP  OK
+  Ler Arquivo de Retorno do FTP         OK
+  Envio de E-mail em caso de Erro       OK
+  Tread
+    Separacao
+	Recebimento

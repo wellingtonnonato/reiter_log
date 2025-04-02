@@ -1,0 +1,215 @@
+ALTER TABLE reiterlog.tab_separacao add des_log text default '';										  
+
+ALTER TABLE reiterlog.tab_recebimento add des_log text default '';
+
+COMMENT ON COLUMN reiterlog.tab_separacao.ind_status
+  IS 'AE - Aguardando Envio
+      PE - Processando Envio
+      AR - Aguardando Retorno
+	  PR - Processando Retorno
+	   F - Finalizado
+      LE - Liberar Edicao Pre Venda';
+	  
+CREATE OR REPLACE FUNCTION reiterlog.fc_int_reiterlog_pre_venda (
+)
+RETURNS trigger AS
+$body$
+DECLARE
+  bUtilizaIntReiterLog Boolean;
+  bExisteSeparacao Boolean;
+  bExisteTabela Boolean;  
+  sEmpresas varchar(500);
+  iSeqPreVenda Integer;
+  iCodEmpresa Integer;
+  sTipo Char(1);
+BEGIN
+  bExisteTabela := Exists(Select 1
+                            from pg_tables a  
+                           where a.schemaname = 'reiterlog'
+                             and a.tablename = 'tab_parametro_integracao');
+  
+  if bExisteTabela then
+    sEmpresas = Coalesce((Select a.val_parametro
+                            from reiterlog.tab_parametro_integracao a
+                           where a.seq_parametro = 1),'');
+    if (sEmpresas <> '') then
+      IF (upper(tg_op) = 'DELETE') THEN
+        iCodEmpresa = OLD.cod_empresa;
+        iSeqPreVenda = OLD.seq_pre_venda;
+      else
+        iCodEmpresa = New.cod_empresa;
+        iSeqPreVenda = New.seq_pre_venda;
+      end if;
+      
+      bUtilizaIntReiterLog = EXISTS(Select 1 
+                                      from tab_empresa a
+                                     where a.cod_empresa = iCodEmpresa 
+                                       and a.cod_empresa = Any(CAST(regexp_split_to_array(sEmpresas, ',') as INTEGER[])));
+      IF bUtilizaIntReiterLog then
+        Select case when coalesce(b.ind_devolucao, 'N') = 'S'
+                    then 'D'
+                    Else 'S'
+                end as Tipo
+          into sTipo 
+          from tab_pre_venda a
+          join tab_natureza_operacao b on b.cod_natureza_operacao = a.cod_natureza_operacao    
+         where a.seq_pre_venda = iSeqPreVenda;
+        
+        bExisteSeparacao = EXISTS(Select 1 
+                                    from reiterlog.tab_separacao a
+                                   where a.seq_separacao = iSeqPreVenda); 
+        
+        IF bExisteSeparacao THEN
+          IF (upper(tg_op) = 'DELETE') THEN
+            RAISE EXCEPTION 'Pre venda vinculada a integração do Reiter Log não será possível deletar'; 
+          ELSIF NOT EXISTS(Select 1
+                            from reiterlog.tab_separacao a
+                           where a.seq_separacao = iSeqPreVenda
+                             and a.ind_status in ('PR', 'LE')) THEN
+                                                          
+            IF (OLD.ind_status <> NEW.ind_status) AND
+               (NEW.ind_status IN ('FP', 'FA', 'CC', 'FF')) THEN
+              
+              IF NOT EXISTS(Select 1
+                            from reiterlog.tab_separacao a
+                           where a.seq_separacao = iSeqPreVenda
+                             and a.ind_finalizado = 'S') THEN
+                 RAISE EXCEPTION 'Pre Venda Aguardando finalizar a integracao com o WMS da Reiter Log';            
+              END IF;
+            ELSIF (OLD.ind_status <> NEW.ind_status) AND
+                  (OLD.ind_status = 'AP') THEN
+              RAISE EXCEPTION 'Pre Venda Aguardando finalizar a integracao com o WMS da Reiter Log';
+            END IF;
+          END IF;
+          
+          IF EXISTS(Select 1
+                      from reiterlog.tab_separacao a
+                     where a.seq_separacao = iSeqPreVenda
+                       and a.ind_status = 'LE') THEN
+            IF (OLD.ind_status <> NEW.ind_status) AND
+               (NEW.ind_status IN ('FA', 'CC', 'FF')) THEN
+               
+              Update reiterlog.tab_separacao a set ind_status = 'F'
+                                             where a.ind_status = 'LE'
+                                               and a.seq_separacao = iSeqPreVenda;
+            END IF;
+          END IF;   
+        ELSIF (upper(tg_op) <> 'DELETE') THEN
+          IF NEW.ind_status = 'AP' THEN
+            EXECUTE reiterlog.sp_insere_separacao(iSeqPreVenda, sTipo);
+            UPDATE tab_item_pre_venda set ind_wms_reiterlog = 'S'
+                                    where seq_pre_venda = iSeqPreVenda;
+          END IF;
+        END IF;
+      END IF;                                
+    END IF;                                             
+  END IF;
+  
+  IF (upper(tg_op) = 'DELETE') THEN
+    return OLD;
+  ELSE
+    return NEW;
+  END IF;
+END;
+$body$
+LANGUAGE 'plpgsql'
+VOLATILE
+CALLED ON NULL INPUT
+SECURITY INVOKER;	  
+	  
+CREATE OR REPLACE FUNCTION reiterlog.fc_int_reiterlog_item_pre_venda (
+)
+RETURNS trigger AS
+$body$
+DECLARE
+  bUtilizaIntReiterLog Boolean;
+  bExisteSeparacao Boolean;
+  bExisteTabela Boolean;
+  sEmpresas varchar(500);
+  iCodEmpresa Integer;
+  iSeqPreVenda Integer;
+  iSeqItem Integer;
+  sStatus char(2);    
+BEGIN
+  bExisteTabela := Exists(Select 1
+                            from pg_tables a  
+                           where a.schemaname = 'reiterlog'
+                             and a.tablename = 'tab_parametro_integracao');
+  IF bExisteTabela THEN
+    sEmpresas = Coalesce((Select a.val_parametro
+                            from reiterlog.tab_parametro_integracao a
+                           where a.seq_parametro = 1),'');
+                           
+    IF sEmpresas <> '' THEN
+      IF (upper(tg_op) = 'DELETE') THEN
+        iSeqPreVenda = OLD.seq_pre_venda;
+        iSeqItem = OLD.seq_item;
+      else
+        iSeqPreVenda = New.seq_pre_venda;
+        iSeqItem = NEW.seq_item;
+      end if;
+      
+      Select a.cod_empresa
+        INTO iCodEmpresa
+        from tab_pre_venda a
+       where a.seq_pre_venda = iSeqPreVenda;        
+      
+      bUtilizaIntReiterLog = EXISTS(Select 1 
+                                      from tab_empresa a
+                                     where a.cod_empresa = iCodEmpresa 
+                                       and a.cod_empresa = Any(CAST(regexp_split_to_array(sEmpresas, ',') as INTEGER[])));
+      
+      IF bUtilizaIntReiterLog THEN
+        Select a.ind_status
+          INTO sStatus
+          from tab_pre_venda a
+         where a.seq_pre_venda = iSeqPreVenda;
+        
+        bExisteSeparacao = EXISTS(Select 1 
+                                    from reiterlog.tab_separacao_item a
+                                   where a.seq_separacao = iSeqPreVenda
+                                     AND a.seq_item = iSeqItem);
+        IF bExisteSeparacao THEN
+          IF (upper(tg_op) = 'DELETE') THEN
+            IF (OLD.QTD_ENTREGUE_CONVERTIDA > 0) THEN
+             RAISE EXCEPTION 'DELETE ITEM Pre venda vinculada a integração do Reiter Log não será possível excluir o item';
+            END IF;
+                        
+          ELSIF ((NEW.qtd_item <> OLD.qtd_item) OR
+                 (NEW.QTD_ITEM_CONVERTIDO <> OLD.QTD_ITEM_CONVERTIDO) OR
+                 (NEW.COD_UNIDADE_VENDA <> OLD.COD_UNIDADE_VENDA) OR
+                 (NEW.QTD_ITEM_CANCELADO <> OLD.QTD_ITEM_CANCELADO) OR
+                 (NEW.QTD_ENTREGUE_CONVERTIDA <> OLD.QTD_ENTREGUE_CONVERTIDA) OR
+                 (NEW.QTD_ENTREGUE <> OLD.QTD_ENTREGUE) OR
+                 (NEW.QTD_ATENDIDA <> OLD.QTD_ATENDIDA)) THEN
+            IF NOT EXISTS(Select 1
+                            from reiterlog.tab_separacao a
+                           where a.seq_separacao = iSeqPreVenda
+                             and a.ind_status in ('PR', 'LE')) THEN
+               RAISE EXCEPTION 'A undiade e a quantidade do item nao pode ser alterada devia a integração do wms da Reiter Log.';              
+            END IF;
+          END IF;          
+        ELSIF (upper(tg_op) = 'UPDATE') AND
+              (Coalesce(NEW.ind_wms_reiterlog, 'N') = 'S') THEN
+          EXECUTE reiterlog.sp_insere_item_separacao( iSeqPreVenda
+                                                    , iSeqItem
+                                                    , NEW.cod_item
+                                                    , NEW.qtd_item_convertido
+                                                    , NEW.qtd_item
+                                                    , NEW.cod_unidade_venda);
+        END IF;
+      END IF;
+    END IF;                       
+  END IF;
+  
+  IF (upper(tg_op) = 'DELETE') THEN
+    return OLD;
+  ELSE
+    return NEW;
+  END IF;
+END;
+$body$
+LANGUAGE 'plpgsql'
+VOLATILE
+CALLED ON NULL INPUT
+SECURITY INVOKER;	  
